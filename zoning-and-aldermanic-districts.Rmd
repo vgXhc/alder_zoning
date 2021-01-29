@@ -1,0 +1,124 @@
+---
+title: "Untitled"
+description: |
+  A new article created using the Distill format.
+author:
+  - name: Nora Jones 
+    url: https://example.com/norajones
+    affiliation: Spacely Sprockets
+    affiliation_url: https://example.com/spacelysprokets
+date: "`r Sys.Date()`"
+output: distill::distill_article
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r libraries}
+library(tidyverse)
+library(sf)
+library(tmap)
+library(janitor)
+```
+```{r}
+# import zoning map from csv
+# manually specify column types
+download.file("https://opendata.arcgis.com/datasets/4bfd0deffa8f4d5f8eefe868ab91493c_9.zip", "data/4bfd0deffa8f4d5f8eefe868ab91493c_9.zip")
+unzip("data/4bfd0deffa8f4d5f8eefe868ab91493c_9.zip", exdir = "data")
+file.remove("data/4bfd0deffa8f4d5f8eefe868ab91493c_9.zip")
+
+
+zoning <- read_sf("data/Zoning_Districts.shp")
+
+download.file("https://opendata.arcgis.com/datasets/81039877861c40a1857b2e7634951e04_10.zip", "data/81039877861c40a1857b2e7634951e04_10.zip")
+unzip("data/81039877861c40a1857b2e7634951e04_10.zip", exdir = "data")
+file.remove("data/81039877861c40a1857b2e7634951e04_10.zip")
+alder <- read_sf("data/Aldermanic_Districts.shp")
+
+zon_alder <- zoning %>% 
+  st_join(alder, st_intersects)
+
+dupes <- zon_alder %>% 
+  get_dupes(OBJECTID.x)
+
+tmap_mode("view")
+
+
+  tm_shape(dupes) +
+  tm_polygons(col = "red") +
+    tm_shape(alder) +
+  #tm_polygons(alpha = .2,) +
+  tm_borders("white", lwd = .5) 
+#create variables for residential zoning and single-family zoning codes
+res_zones <- c("SR-C1", 
+                 "SR-C2", 
+                 "SR-C3", 
+                 "SR-V1",
+                 "SR-V2",
+                 "TR-C1",
+                 "TR-C2", 
+                 "TR-C3",
+                 "TR-C4",
+                 "TR-V1",
+                 "TR-V2", 
+                 "TR-U1", 
+                 "TR-U2", 
+                 "TR-R",
+                 "TR-P")
+
+sfr_zones <- c("SR-C1", 
+         "SR-C2",
+         "TR-C1", 
+         "TR-C2", 
+         "TR-C3", 
+         "TR-R")
+
+# someone was interested what the analysis would look 
+# like if instead of looking at only residential, you 
+# would look at all land, except for parks etc. New variable
+# for all "Special Districts"
+other <- c("A",
+           "UA",
+           "CN",
+           "PR",
+           "AP",
+           "CI",
+           "PD",
+           "PHMP")
+
+#calculate total residential area
+res_total <- data %>%
+  filter(ZONING_CODE %in% res_zones) %>%
+  summarize(sum(ShapeSTArea))
+
+#detached single-family only
+res_sfr <- data %>%
+  filter(ZONING_CODE %in% sfr_zones) %>%
+  summarize(sum(ShapeSTArea))
+
+# only special district area
+other_area <- data %>%
+  filter(ZONING_CODE %in% other) %>%
+  summarise(sum(ShapeSTArea))
+
+total <- data %>% summarize(sum(ShapeSTArea))
+res_sfr/(total-other_area)
+sfr_ratio <- round((res_sfr/res_total)*100, digits = 0)
+
+# relationship between % single family zoning and overall density
+dens_zon <- read_csv("data/density_zoning.csv")
+
+dens_zon %>% 
+  spread(Measure, Value) %>%
+  ggplot(aes(sfr, density, label = City)) +
+  geom_point() +
+  geom_text(check_overlap = TRUE, angle = 45, vjust = 0.1, hjust = -0.1)
+```
+
+There is an issue with zoning districts and aldermanic districts not lining up. One zoning district can be in as many as 5 different aldermanic districts. Unfortunately the extent of this pretty large and needs to be accounted for.
+
+Need to somehow apportion zoning districts according to the percentage they cover each district. 
+
+
