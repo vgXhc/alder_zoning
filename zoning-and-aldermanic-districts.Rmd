@@ -9,19 +9,21 @@ author:
     affiliation_url: https://example.com/spacelysprokets
 date: "`r Sys.Date()`"
 output: distill::distill_article
+bibliography: references.bib
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
-
 ```{r libraries}
 library(tidyverse)
 library(sf)
 library(tmap)
+library(mapview)
 library(janitor)
 ```
+
 ```{r}
 # import zoning map from csv
 # manually specify column types
@@ -30,27 +32,86 @@ unzip("data/4bfd0deffa8f4d5f8eefe868ab91493c_9.zip", exdir = "data")
 file.remove("data/4bfd0deffa8f4d5f8eefe868ab91493c_9.zip")
 
 
-zoning <- read_sf("data/Zoning_Districts.shp")
+zoning <- read_sf("data/Zoning_Districts.shp") %>% 
+  st_make_valid() #source polygons contained some invalid geometries
 
 download.file("https://opendata.arcgis.com/datasets/81039877861c40a1857b2e7634951e04_10.zip", "data/81039877861c40a1857b2e7634951e04_10.zip")
 unzip("data/81039877861c40a1857b2e7634951e04_10.zip", exdir = "data")
 file.remove("data/81039877861c40a1857b2e7634951e04_10.zip")
-alder <- read_sf("data/Aldermanic_Districts.shp")
+alder <- read_sf("data/Aldermanic_Districts.shp") %>% 
+  st_make_valid() #source polygons contained some invalid geometries
+```
 
+As a first step, we'll just do a spatial join of the zoning districts with the aldermanic districts:
+
+```{r}
 zon_alder <- zoning %>% 
   st_join(alder, st_intersects)
 
+```
+
+Aldermanic district boundaries and zoning district boundaries don't always line up, and a zoning district can be in multiple aldermanic districts. The `get_dupes` function from the `janitor` package can easily identify those:
+
+```{r}
 dupes <- zon_alder %>% 
-  get_dupes(OBJECTID.x)
+  get_dupes(OBJECTID.x) %>% 
+  arrange(desc(dupe_count))
+
+```
+
+We can see that there are zoning districts that are in as many as `r max(dupes$dupe_count)` aldermanic district, and this some of these districts are large (zoning districts are red; the outlines of the aldermanic districts white):
+
+```{r}
+
 
 tmap_mode("view")
 
 
-  tm_shape(dupes) +
+tm_shape(dupes) +
   tm_polygons(col = "red") +
     tm_shape(alder) +
   #tm_polygons(alpha = .2,) +
-  tm_borders("white", lwd = .5) 
+  tm_borders("white", lwd = .5) +
+    tm_layout(title = "Zoning districts covering multiple aldermanic districts")
+  
+```
+
+So before we can calculate percentages of zoning types per district, we need to stamp out the duplicate zoning districts out of their respective aldermanic district. This can be done with the `st_intersection` function. A good reminder of the types of geometric operations can be found in "Geocomputation with R"[@lovelace2019j]:
+
+![Spatial equivalents of logical operators. Figure 5.8 in "Geocomputation with R"](https://geocompr.robinlovelace.net/05-geometry-operations_files/figure-html/venn-clip-1.png)
+
+Let's test on one district from `dupes`:
+
+```{r}
+# st_set_precision(dupes, 1)
+
+y <-  dupes %>% 
+  st_set_precision(1000000) %>% 
+  filter(st_is_valid(.)) 
+  
+st_is_valid(dupes)
+
+
+y <- dupes %>% 
+  st_intersection(alder) %>% 
+  distinct(ALD_DIST.1, .keep_all = T)
+
+library(mapview)
+
+st_is_valid(y)
+
+y %>% 
+  filter(ALD_DIST.1 == 10) %>% 
+  tm_shape() +
+  tm_fill("ALD_DIST.1",
+          alpha = .4)
+```
+
+This fails with an error message
+
+Need to somehow apportion zoning districts according to the percentage they cover each district.
+
+```{r}
 #create variables for residential zoning and single-family zoning codes
 res_zones <- c("SR-C1", 
                  "SR-C2", 
@@ -115,10 +176,6 @@ dens_zon %>%
   ggplot(aes(sfr, density, label = City)) +
   geom_point() +
   geom_text(check_overlap = TRUE, angle = 45, vjust = 0.1, hjust = -0.1)
+
+
 ```
-
-There is an issue with zoning districts and aldermanic districts not lining up. One zoning district can be in as many as 5 different aldermanic districts. Unfortunately the extent of this pretty large and needs to be accounted for.
-
-Need to somehow apportion zoning districts according to the percentage they cover each district. 
-
-
