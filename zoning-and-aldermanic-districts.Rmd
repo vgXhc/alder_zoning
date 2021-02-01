@@ -39,7 +39,8 @@ download.file("https://opendata.arcgis.com/datasets/81039877861c40a1857b2e763495
 unzip("data/81039877861c40a1857b2e7634951e04_10.zip", exdir = "data")
 file.remove("data/81039877861c40a1857b2e7634951e04_10.zip")
 alder <- read_sf("data/Aldermanic_Districts.shp") %>% 
-  st_make_valid() #source polygons contained some invalid geometries
+  st_make_valid() %>% #source polygons contained some invalid geometries
+  mutate(area_ald = st_area(.)) #calculate area for later use
 ```
 
 As a first step, we'll just do a spatial join of the zoning districts with the aldermanic districts:
@@ -80,38 +81,76 @@ So before we can calculate percentages of zoning types per district, we need to 
 
 ![Spatial equivalents of logical operators. Figure 5.8 in "Geocomputation with R"](https://geocompr.robinlovelace.net/05-geometry-operations_files/figure-html/venn-clip-1.png)
 
-Let's test on one district from `dupes`:
+Let's run this on `dupes`:
 
 ```{r}
-# st_set_precision(dupes, 1)
-
-y <-  dupes %>% 
-  st_set_precision(1000000) %>% 
-  filter(st_is_valid(.)) 
-  
-st_is_valid(dupes)
-
-
-y <- dupes %>% 
+de_dupe <- dupes %>% 
   st_intersection(alder) %>% 
-  distinct(ALD_DIST.1, .keep_all = T)
+  distinct(ALD_DIST.1, .keep_all = T) %>% #drop duplicate rows
+  select(-Zoning_Doc, Zoning_Dis, ShapeSTAre, ShapeSTLen, ALD_DIST)
+```
 
-library(mapview)
+When trying to visualize the result, we get an error:
+```{r}
+de_dupe %>% 
+  #filter(OBJECTID.x == 400534) %>% 
+  tm_shape() +
+  tm_fill("ALD_DIST.1",
+          alpha = .4)
+```
+Looking at the error in row 84 shows this:
 
-st_is_valid(y)
+```{r}
+de_dupe$geometry[84,]
+```
+It's a linestring, not a polygon! What has happened here that there was enough overlap between the geometries to be caught by `st_intersection` but the overlap is such a small sliver that it essentially becomes a line.
 
-y %>% 
-  filter(ALD_DIST.1 == 10) %>% 
+```{r}
+de_dupe[-84,] %>% 
   tm_shape() +
   tm_fill("ALD_DIST.1",
           alpha = .4)
 ```
 
-This fails with an error message
+Merely removing the offending line doesn't fix the issue---probably there are many instance of this happening:
 
-Need to somehow apportion zoning districts according to the percentage they cover each district.
+```{r echo=T}
+st_geometry_type(de_dupe)
+```
+Quite the potpourri of geometry types! We could filter by geometry type, but it's difficult to figure out which ones to keep and which ones to drop. For example, row 226 is a polygon, but when you plot it, it turns out not to be that useful:
 
 ```{r}
+de_dupe[226,] %>% 
+  mapview()
+```
+
+I considered different approaches to fixing this (e.g. filtering out geometries with very small areas) but none of them really worked. Fortunately we don't have to be able to map the districts in order to do the quantitative analysis. So I'll will intersect all zoning districts with aldermanic districts now and then calculate their area (in m^2):
+
+```{r}
+zon_alder_split <- zon_alder %>% 
+  st_intersection(alder) %>% 
+  distinct(ALD_DIST.1, .keep_all = T) %>% #drop duplicate rows
+  select(-c(Zoning_Doc, Zoning_Dis, ShapeSTAre, ShapeSTLen, ALD_DIST))
+
+zon_alder_split <- zon_alder_split %>% 
+  mutate(area_zon = st_area(.))
+
+```
+Now we could summarize the proportions of different types of zoning by aldermanic district:
+
+```{r}
+zon_alder_split %>% 
+  st_drop_geometry() %>% 
+  group_by(ALD_DIST.1, ZONING_COD) %>% 
+  summarize(share_of_land = sum(area_zon)/area_ald.1) %>% 
+  distinct()
+```
+Of course this too granular and we need to aggregate types of zoning districts. I did some of this work for a [previous post](https://haraldkliems.netlify.app/posts/how-much-of-madison-allows-only-detached-single-family-housing/). Of note, the denominator of the area requires some decisions. It makes sense not to include parks, airports, or the UW campus. These will be excluded before calculating the single-family residential ratio.
+
+
+
+```{r}
+
 #create variables for residential zoning and single-family zoning codes
 res_zones <- c("SR-C1", 
                  "SR-C2", 
@@ -138,7 +177,7 @@ sfr_zones <- c("SR-C1",
 
 # someone was interested what the analysis would look 
 # like if instead of looking at only residential, you 
-# would look at all land, except for parks etc. New variable
+# would look at all land, except for parks, airports etc. New variable
 # for all "Special Districts"
 other <- c("A",
            "UA",
@@ -148,6 +187,17 @@ other <- c("A",
            "CI",
            "PD",
            "PHMP")
+
+
+zon_alder_split %>% 
+  st_drop_geometry() %>% 
+  filter(!ZONING_COD %in% other) %>% 
+  mutate(sfr = case_when(ZONING_COD %in% sfr_zones ~ "single-family residential",
+                         T ~ "other")) %>% 
+  group_by(ALD_DIST.1, sfr) %>% 
+  summarize(share_of_land = sum(area_zon)/area_ald.1) %>% #denominator is wrong here (counts whole alder district)
+  distinct()
+
 
 #calculate total residential area
 res_total <- data %>%
