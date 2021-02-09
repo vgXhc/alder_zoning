@@ -189,14 +189,33 @@ other <- c("A",
            "PHMP")
 
 
-zon_alder_split %>% 
+
+  
+
+zon_pct <- zon_alder_split %>% 
   st_drop_geometry() %>% 
-  filter(!ZONING_COD %in% other) %>% 
-  mutate(sfr = case_when(ZONING_COD %in% sfr_zones ~ "single-family residential",
-                         T ~ "other")) %>% 
+  filter(!ZONING_COD %in% other) %>% #remove non-developable land
+  mutate(sfr = case_when(ZONING_COD %in% sfr_zones ~ "sfr",
+                         T ~ "other")) %>% #dichotomize remaining zoning codes
   group_by(ALD_DIST.1, sfr) %>% 
-  summarize(share_of_land = sum(area_zon)/area_ald.1) %>% #denominator is wrong here (counts whole alder district)
-  distinct()
+  summarize(area_dist = sum(area_zon)) %>% #sum up area by district and zoning
+  pivot_wider(names_from = sfr, values_from = area_dist) %>%
+  mutate(sfr = replace_na(sfr, 0)) %>% #districts with no sfr show up as NA; replace with 0
+  mutate(pct_residential = as.numeric(sfr / (other + sfr))) #calculate ratio
+  
+```
+Now we can create a choropleth map of the percentages:
+
+```{r}
+alder %>% 
+  select(-OBJECTID) %>% 
+  left_join(zon_pct, by = c("ALD_DIST" = "ALD_DIST.1")) %>% 
+  tm_shape() +
+  tm_polygons("pct_residential", style = "jenks",
+              palette = "viridis")
+```
+
+```{r}
 
 
 #calculate total residential area
@@ -227,5 +246,5 @@ dens_zon %>%
   geom_point() +
   geom_text(check_overlap = TRUE, angle = 45, vjust = 0.1, hjust = -0.1)
 
-
 ```
+
